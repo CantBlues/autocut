@@ -1,3 +1,4 @@
+import datetime
 import logging
 import os
 import re
@@ -143,6 +144,13 @@ class Cutter:
             media.close()
             return
 
+        # Generate new subtitles with adjusted timestamps
+        new_subs = self._generate_new_subtitles(subs, segments)
+        srt_output_fn = utils.change_ext(utils.add_cut(fns["media"]), "srt")
+        with open(srt_output_fn, "wb") as f:
+            f.write(srt.compose(new_subs).encode(self.args.encoding, "replace"))
+        logging.info(f"Saved new subtitles to {srt_output_fn}")
+
         clips = [media.subclipped(s["start"], s["end"]) for s in segments]
         if is_video_file:
             final_clip: VideoClip = concatenate_videoclips(clips)
@@ -172,3 +180,43 @@ class Cutter:
 
         media.close()
         logging.info(f"Saved media to {output_fn}")
+
+    def _generate_new_subtitles(self, subs, segments):
+        """Generate new subtitles with adjusted timestamps based on selected segments"""
+        new_subs = []
+        current_time = 0.0
+        sub_index = 1
+
+        for seg in segments:
+            seg_start = seg["start"]
+            seg_end = seg["end"]
+            seg_duration = seg_end - seg_start
+
+            # Find subtitles that fall within this segment
+            for sub in subs:
+                sub_start = sub.start.total_seconds()
+                sub_end = sub.end.total_seconds()
+
+                # Check if subtitle overlaps with segment
+                if sub_end <= seg_start or sub_start >= seg_end:
+                    continue
+
+                # Calculate new timestamps relative to the cut video
+                new_start = max(0, sub_start - seg_start) + current_time
+                new_end = min(sub_end - seg_start, seg_duration) + current_time
+
+                if new_end > new_start:
+                    new_subs.append(
+                        srt.Subtitle(
+                            index=sub_index,
+                            start=datetime.timedelta(seconds=new_start),
+                            end=datetime.timedelta(seconds=new_end),
+                            content=sub.content,
+                        )
+                    )
+                    sub_index += 1
+
+            # Update current time for next segment
+            current_time += seg_duration
+
+        return new_subs
